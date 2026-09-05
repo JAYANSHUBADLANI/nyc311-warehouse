@@ -10,7 +10,7 @@ models:
     columns:
       - name: request_id
         description: Degenerate dimension, the natural key of the request itself.
-        tests:
+        data_tests:
           - unique:
               config:
                 severity: error
@@ -20,7 +20,7 @@ models:
 
       - name: agency_key
         description: Foreign key to dim_agency. UNKNOWN when the source carried no agency.
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
@@ -34,7 +34,7 @@ models:
         description: >
           Foreign key to the version of dim_complaint_type that was in force
           when the request was created, not to the current version.
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
@@ -46,7 +46,7 @@ models:
 
       - name: geography_key
         description: Foreign key to dim_geography.
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
@@ -58,7 +58,7 @@ models:
 
       - name: created_date_key
         description: Foreign key to dim_date.
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
@@ -69,7 +69,7 @@ models:
                 severity: error
 
       - name: created_at
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
@@ -81,7 +81,7 @@ models:
           requests that simply have not finished.
 
       - name: is_closed
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
@@ -90,7 +90,7 @@ models:
     description: Agency dimension, Type 1, with an explicit unknown member.
     columns:
       - name: agency_key
-        tests:
+        data_tests:
           - unique:
               config:
                 severity: error
@@ -102,7 +102,7 @@ models:
     description: Borough, community board and zip combination. Type 1.
     columns:
       - name: geography_key
-        tests:
+        data_tests:
           - unique:
               config:
                 severity: error
@@ -114,7 +114,7 @@ models:
     description: Generated calendar spine covering the ingest window plus a year either side.
     columns:
       - name: date_key
-        tests:
+        data_tests:
           - unique:
               config:
                 severity: error
@@ -130,7 +130,7 @@ models:
     columns:
       - name: complaint_type_key
         description: Surrogate key, unique per version rather than per natural key.
-        tests:
+        data_tests:
           - unique:
               config:
                 severity: error
@@ -138,17 +138,17 @@ models:
               config:
                 severity: error
       - name: is_current
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
       - name: valid_from_at
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
       - name: valid_to_at
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
@@ -159,12 +159,12 @@ models:
       measure named in config/metrics.yml is implemented here exactly once.
     columns:
       - name: cohort_month
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
       - name: request_volume
-        tests:
+        data_tests:
           - not_null:
               config:
                 severity: error
@@ -173,7 +173,7 @@ models:
     description: The naive duration series next to the maturity corrected one, with the bias between them.
     columns:
       - name: cohort_month
-        tests:
+        data_tests:
           - unique:
               config:
                 severity: error

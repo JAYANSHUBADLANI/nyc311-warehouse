@@ -29,7 +29,7 @@ models:
       This is the correct one and the reference the other is scored against.
     columns:
       - name: request_id
-        tests:
+        data_tests:
           - unique:
               config:
                 severity: error
@@ -43,7 +43,7 @@ models:
       rate and mean resolution time, with the error in each.
     columns:
       - name: vintage_seq
-        tests:
+        data_tests:
           - unique:
               config:
                 severity: error

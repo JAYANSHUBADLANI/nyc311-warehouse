@@ -14,10 +14,21 @@
 -- fan out a many to many join and double count. Resolving them here means the
 -- grain is fixed and stated, and the tool is only asked to filter and sum.
 --
--- Grain: cohort month, agency, complaint type, borough. One row per
--- combination that had at least one request. Because the grain is fixed, every
--- additive measure below sums correctly across any subset of the dimensions,
--- with the two exceptions called out in the column comments.
+-- Grain: cohort month, agency, complaint type, descriptor, complaint type
+-- version, borough, cohort maturity flag. One row per combination that had at
+-- least one request. Because the grain is fixed, every additive measure below
+-- sums correctly across any subset of the dimensions, with the two exceptions
+-- called out in the column comments.
+--
+-- The descriptor belongs in that list and carrying it is not optional. The
+-- upstream mart is keyed on the complaint type surrogate, which resolves a
+-- complaint type and descriptor pair, so leaving the descriptor out does not
+-- merge those rows, it only hides what separates them. Without it a filter on
+-- one complaint type and borough returns several rows that are identical in
+-- every visible column and carry different measures, which reads as duplicate
+-- data and invites either double counting or an arbitrary pick. It also leaves
+-- the export with no unique sort key, so two builds write the tied rows in
+-- different orders and the files stop being byte identical.
 
 with base as (
 
@@ -51,6 +62,7 @@ labelled as (
     select
         b.*,
         a.agency_name,
+        d.descriptor,
         d.owning_agency_code       as complaint_type_owning_agency,
         d.version_number           as complaint_type_version,
         d.is_current               as complaint_type_version_is_current,
@@ -76,6 +88,7 @@ select
     agency_key                                    as agency_code,
     agency_name,
     complaint_type,
+    descriptor,
     complaint_type_owning_agency,
     complaint_type_version,
     complaint_type_version_is_current,
@@ -119,4 +132,12 @@ select
     on_time_rate * on_time_denominator            as on_time_numerator
 
 from labelled
-order by cohort_month, agency_code, complaint_type, borough
+-- The full grain, so the ordering is total and the export is reproducible.
+order by
+    cohort_month,
+    agency_code,
+    complaint_type,
+    descriptor,
+    complaint_type_version,
+    borough,
+    is_cohort_mature

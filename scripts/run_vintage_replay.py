@@ -16,6 +16,7 @@ built from.
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import sys
@@ -30,18 +31,32 @@ from src.config import load_config  # noqa: E402
 
 DRIFT_TABLE = "comparison.vintage_drift_log"
 
+# The dbt executable that belongs to the interpreter running this script. A
+# bare "dbt" only resolves when the virtualenv happens to be activated, which
+# is true from the shell wrapper and false from make, so it is resolved from
+# sys.executable instead and works either way.
+DBT_BIN = str(Path(sys.executable).parent / "dbt")
 
-def run_dbt(project_dir: Path, profiles_dir: Path, select: str, dbt_vars: dict, full_refresh: bool) -> None:
+
+def run_dbt(project_dir: Path, profiles_dir: Path, select: str, dbt_vars: dict,
+            full_refresh: bool, target: str | None = None) -> None:
     cmd = [
-        "dbt", "run",
+        DBT_BIN, "run",
         "--project-dir", str(project_dir),
         "--profiles-dir", str(profiles_dir),
         "--select", select,
         "--vars", json.dumps(dbt_vars),
     ]
+    if target:
+        cmd += ["--target", target]
     if full_refresh:
         cmd.append("--full-refresh")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Run from inside the dbt project, because the duckdb path in profiles.yml
+    # is written relative to that directory so the repo works as cloned. dbt
+    # resolves it against the working directory rather than against
+    # --project-dir, so invoking this from the repo root would look for the
+    # database two levels above the repo.
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(project_dir))
     if result.returncode != 0:
         print(result.stdout[-4000:])
         print(result.stderr[-2000:])
@@ -106,10 +121,19 @@ def measure(con: duckdb.DuckDBPyConnection, vintage: str, seq: int) -> dict:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="replay against the sample warehouse using the devsample dbt target",
+    )
+    args = parser.parse_args()
+
     cfg = load_config()
     project_dir = (cfg.repo_root / cfg["dbt"]["project_dir"]).resolve()
     profiles_dir = (cfg.repo_root / cfg["dbt"]["profiles_dir"]).resolve()
-    db_path = cfg.path("warehouse_db")
+    db_path = cfg.path("sample_db" if args.sample else "warehouse_db")
+    target = "devsample" if args.sample else None
 
     base_vars = build_vars(cfg)
 
@@ -139,7 +163,7 @@ def main() -> int:
         run_dbt(
             project_dir, profiles_dir,
             "int_vintage_source fct_requests_append_only fct_requests_merge",
-            run_vars, full_refresh=first,
+            run_vars, full_refresh=first, target=target,
         )
 
         con = duckdb.connect(str(db_path))

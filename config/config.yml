@@ -109,6 +109,15 @@ paths:
   vintages_dir: data/vintages
   warehouse_db: data/warehouse.duckdb
   bi_mart_dir: reports/generated/bi_mart
+  # The sample run writes to its own database and its own output directory, and
+  # never to the two above. Pointing it at the real warehouse would mean that
+  # running the offline demo after a full pull silently replaced 3.9 million
+  # rows with the sample and rewrote every generated report with sample numbers
+  # in exactly the same format, leaving the committed evidence disagreeing with
+  # the README and nothing on screen to say so.
+  sample_db: data/sample_warehouse.duckdb
+  sample_report_dir: reports/generated_sample
+  sample_bi_mart_dir: reports/generated_sample/bi_mart
 
 dbt:
   project_dir: dbt/nyc311_warehouse

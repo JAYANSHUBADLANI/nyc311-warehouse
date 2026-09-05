@@ -6,10 +6,13 @@ DBT_DIR := dbt/nyc311_warehouse
 PROFILES_DIR := dbt
 
 # Every dbt invocation reads its vars from config/config.yml through this, so a
-# model and the ingest that fed it can never disagree about the window.
-DBT_VARS = $$($(PY) scripts/config_to_dbt_vars.py --json)
+# model and the ingest that fed it can never disagree about the window. The
+# value has to be resolved before the recipe changes directory, because the
+# script path is relative to the repo root, and it has to be passed in double
+# quotes so the shell substitutes it rather than handing dbt the literal text.
+DBT_VARS_CMD = $(PY) scripts/config_to_dbt_vars.py --json
 
-.PHONY: help venv fetch sample load build test replay reports demo demo-sample clean check-fresh probe-capture probe-recheck
+.PHONY: help venv fetch sample load load-sample build build-sample test test-sample replay replay-sample reports reports-sample pytest demo demo-sample clean probe-capture probe-recheck
 
 help:
 	@echo "make demo          full run: fetch, load, build, test, replay, reports"
@@ -46,18 +49,44 @@ load:
 load-sample:
 	$(PY) -m src.ingest.load_landing --sample
 
-build:
+# Every sample target below runs against the devsample dbt target and the sample
+# paths in config/config.yml, so running the offline demo can never overwrite a
+# real pull or the generated reports the README quotes.
+build-sample:
+	@VARS=$$($(DBT_VARS_CMD)); \
 	cd $(DBT_DIR) && DBT_PROFILES_DIR=../../$(PROFILES_DIR) ../../$(DBT) run \
-		--exclude comparison --vars '$(DBT_VARS)'
+		--target devsample --exclude comparison --vars "$$VARS"
+
+test-sample:
+	@VARS=$$($(DBT_VARS_CMD)); \
+	cd $(DBT_DIR) && DBT_PROFILES_DIR=../../$(PROFILES_DIR) ../../$(DBT) test \
+		--target devsample --exclude comparison --vars "$$VARS"
+
+replay-sample:
+	$(PY) scripts/run_vintage_replay.py --sample
+	@VARS=$$($(DBT_VARS_CMD)); \
+	cd $(DBT_DIR) && DBT_PROFILES_DIR=../../$(PROFILES_DIR) ../../$(DBT) build \
+		--target devsample --select comparison_drift_summary --vars "$$VARS"
+
+reports-sample:
+	$(PY) scripts/generate_measure_dictionary.py --sample
+	$(PY) scripts/generate_reports.py --sample
+
+build:
+	@VARS=$$($(DBT_VARS_CMD)); \
+	cd $(DBT_DIR) && DBT_PROFILES_DIR=../../$(PROFILES_DIR) ../../$(DBT) run \
+		--exclude comparison --vars "$$VARS"
 
 test:
+	@VARS=$$($(DBT_VARS_CMD)); \
 	cd $(DBT_DIR) && DBT_PROFILES_DIR=../../$(PROFILES_DIR) ../../$(DBT) test \
-		--exclude comparison --vars '$(DBT_VARS)'
+		--exclude comparison --vars "$$VARS"
 
 replay:
 	$(PY) scripts/run_vintage_replay.py
+	@VARS=$$($(DBT_VARS_CMD)); \
 	cd $(DBT_DIR) && DBT_PROFILES_DIR=../../$(PROFILES_DIR) ../../$(DBT) build \
-		--select comparison_drift_summary --vars '$(DBT_VARS)'
+		--select comparison_drift_summary --vars "$$VARS"
 
 reports:
 	$(PY) scripts/generate_measure_dictionary.py
@@ -73,11 +102,18 @@ demo: load build test replay reports pytest
 
 # Same pipeline, committed sample, no network needed. This is what makes the
 # repo reproducible for someone who just cloned it.
-demo-sample: load-sample build test replay reports pytest
+demo-sample: load-sample build-sample test-sample replay-sample reports-sample pytest
 	@echo ""
-	@echo "sample run complete. numbers are from the committed sample, not the full window"
+	@echo "sample run complete. numbers are from the committed sample, not the full"
+	@echo "window, and were written to reports/generated_sample. The full window"
+	@echo "results in reports/generated are untouched."
 
+# Drops what a build can regenerate. reports/generated is deliberately not in
+# here: it is committed as the evidence for every number the README and the memo
+# quote, so removing it deletes tracked files rather than build output. The
+# sample output is regenerable and untracked, so that one does go.
 clean:
 	rm -f data/warehouse.duckdb data/warehouse.duckdb.wal
+	rm -f data/sample_warehouse.duckdb data/sample_warehouse.duckdb.wal
 	rm -rf $(DBT_DIR)/target $(DBT_DIR)/logs
-	rm -rf reports/generated
+	rm -rf reports/generated_sample

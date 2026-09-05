@@ -5,8 +5,26 @@ nyc311_warehouse:
       type: duckdb
       # relative to the dbt project directory, so the repo runs as cloned
       path: ../../data/warehouse.duckdb
-      threads: 4
+      # One thread, deliberately, and the reason is reproducibility rather
+      # than caution. DuckDB aggregates in whatever order its threads finish,
+      # and floating point addition is not associative, so a mean built from
+      # four threads lands on a different last bit between two builds of the
+      # same input. That is enough to stop the exported mart being byte
+      # identical, which is a stated guarantee of this project. On this data
+      # the whole build is around half a minute either way, so the parallelism
+      # was buying very little and costing the guarantee.
+      threads: 1
+      # dbt's threads setting above only limits how many models run at once. It
+      # does not touch DuckDB's own intra query parallelism, which is what
+      # actually reorders the floating point additions inside a group by, so
+      # the engine is pinned here as well.
+      settings:
+        threads: 1
     devsample:
+      # Must stay in step with paths.sample_db in config/config.yml. This target
+      # exists so the offline sample run cannot touch the real warehouse.
       type: duckdb
-      path: ../../data/dev.duckdb
-      threads: 4
+      path: ../../data/sample_warehouse.duckdb
+      threads: 1
+      settings:
+        threads: 1

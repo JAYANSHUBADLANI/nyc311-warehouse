@@ -45,7 +45,7 @@ def main() -> int:
         return 1
 
     columns = cfg["ingest"]["columns"]
-    db_path = cfg.path("warehouse_db")
+    db_path = cfg.path("sample_db") if args.sample else cfg.path("warehouse_db")
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     con = duckdb.connect(str(db_path))

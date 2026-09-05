@@ -17,8 +17,14 @@ dbt/nyc311_warehouse/target/
 dbt/nyc311_warehouse/dbt_packages/
 dbt/nyc311_warehouse/logs/
 
-# generated reports that depend on a run, not on the code
-reports/generated/
+# Generated reports are committed on purpose. They are the evidence for every
+# number in the README and the memo, both of which link into them, and the BI
+# mart is a stated deliverable rather than a build artefact. Around 11 MB in
+# total, all of it regenerable by `make reports`.
+
+# Output of the offline sample run. Regenerable by `make demo-sample`, and kept
+# out of the repo so there is exactly one set of committed numbers.
+reports/generated_sample/
 
 # local dev scratch, not part of the deliverable
 data/dev/
