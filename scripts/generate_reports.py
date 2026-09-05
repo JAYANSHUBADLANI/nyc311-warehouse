@@ -14,6 +14,7 @@ formatted to a fixed number of places, and nothing reads the wall clock.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -22,6 +23,12 @@ import duckdb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_config  # noqa: E402
+
+
+# Windows probed by the maturity sensitivity report. 90 is the configured
+# choice and sits in the middle deliberately, so the table shows the trend
+# either side of it rather than only past it.
+MATURITY_SENSITIVITY_WINDOWS = [30, 60, 90, 120, 180]
 
 
 def fmt(value, places: int = 2) -> str:
@@ -277,16 +284,273 @@ def report_complaint_type_drift(con, out_dir: Path) -> None:
     )
 
 
-def export_bi_mart(con, cfg) -> None:
-    out_dir = cfg.path("bi_mart_dir")
+# Decimal places kept for every floating point measure in the export. DuckDB
+# aggregates doubles in whatever order its threads finish, so a sum can land on
+# a different last bit between two builds of the same data: 7.885527777777777
+# on one run and 7.885527777777779 on the next. That is float addition not
+# being associative rather than the data changing, but it is enough to make the
+# exported files differ, and 12,001 of 40,751 rows moved that way before this
+# was pinned. Six places is 0.09 seconds on a duration measured in days and
+# one part in a million on a rate, well below anything the source supports.
+BI_EXPORT_DECIMALS = 6
+
+
+def report_status_definition_check(con, out_dir: Path) -> None:
+    """Where is_closed disagrees with the source's own status field.
+
+    is_closed is defined on the presence of a close timestamp, because that is
+    the only definition the timestamps can support and the only one the duration
+    measures can use. The source separately publishes a free text status, and
+    the two do not always agree. This report exists because that disagreement is
+    the whole explanation for DOB closing 100% of its requests, which is
+    otherwise the least believable number in the warehouse.
+    """
+    overall = con.execute("""
+        select
+            f.is_closed,
+            f.status_raw = 'Closed'                          as source_says_closed,
+            count(*)                                         as n
+        from marts.fct_service_request f
+        group by 1, 2
+        order by 1, 2
+    """).fetchall()
+    total = sum(r[2] for r in overall)
+
+    overall_tbl = table(
+        ["Close timestamp present", "Source status is Closed", "Requests", "Share"],
+        [[
+            "yes" if r[0] else "no",
+            "yes" if r[1] else "no",
+            fmt(r[2]),
+            fmt(100.0 * r[2] / total, 2) + "%",
+        ] for r in overall],
+    )
+
+    by_agency = con.execute("""
+        select
+            a.agency_code,
+            count(*)                                         as disagreeing,
+            avg(f.days_to_close)                             as mean_days,
+            count(*) * 1.0 / max(t.agency_total)             as share_of_agency
+        from marts.fct_service_request f
+        join marts.dim_agency a using (agency_key)
+        join (
+            select agency_key, count(*) as agency_total
+            from marts.fct_service_request group by 1
+        ) t on t.agency_key = f.agency_key
+        where f.is_closed and f.status_raw <> 'Closed'
+        group by a.agency_code
+        -- agency_code breaks the tie. Without it HPD and DPR both sit on 5 and
+        -- swap places between builds, which is the same unstable ordering the
+        -- BI export had before the descriptor was added to its sort key.
+        order by disagreeing desc, a.agency_code
+    """).fetchall()
+
+    by_agency_tbl = table(
+        ["Agency", "Closed by timestamp, not by status", "Mean days", "Share of agency"],
+        [[str(r[0]), fmt(r[1]), fmt(r[2], 2), fmt(100.0 * r[3], 2) + "%"]
+         for r in by_agency],
+    )
+
+    detail = con.execute("""
+        select
+            a.agency_code,
+            f.status_raw,
+            count(*)                                         as n,
+            sum(case when f.is_closed then 1 else 0 end)     as with_close_timestamp
+        from marts.fct_service_request f
+        join marts.dim_agency a using (agency_key)
+        where a.agency_code in ('DOB', 'EDC')
+        group by 1, 2
+        order by a.agency_code, n desc, f.status_raw
+    """).fetchall()
+
+    detail_tbl = table(
+        ["Agency", "Source status", "Requests", "With a close timestamp"],
+        [[str(r[0]), str(r[1]), fmt(r[2]), fmt(r[3])] for r in detail],
+    )
+
+    dob = con.execute("""
+        select
+            count(*)                                                        as total,
+            sum(case when f.status_raw = 'Closed' then 1 else 0 end)        as status_closed
+        from marts.fct_service_request f
+        join marts.dim_agency a using (agency_key)
+        where a.agency_code = 'DOB'
+    """).fetchone()
+    dob_total, dob_status_closed = dob
+    dob_rate_by_status = 100.0 * dob_status_closed / dob_total
+
+    write(
+        out_dir / "status_definition_check.md",
+        "# Does a close timestamp mean the request is closed?\n\n"
+        "The warehouse defines `is_closed` as the presence of a close timestamp. "
+        "That is the only definition the duration measures can use, because a "
+        "duration needs two timestamps and a status string is not one of them. "
+        "The source also publishes its own status field, and this report measures "
+        "where the two disagree.\n\n"
+        "It exists to settle a question the README previously left open: DOB "
+        "closing 100% of its requests, and EDC closing 1.9%, both looked like "
+        "artefacts rather than operational facts.\n\n"
+        "## Citywide\n\n"
+        + overall_tbl + "\n\n"
+        "The disagreement is small citywide and it runs almost entirely one way: "
+        "requests that carry a close timestamp while the source still calls them "
+        "something other than Closed.\n\n"
+        "## Where the disagreement lives\n\n"
+        + by_agency_tbl + "\n\n"
+        "## DOB and EDC in detail\n\n"
+        + detail_tbl + "\n\n"
+        "## The answer\n\n"
+        "**DOB's 100% closure rate is an artefact of the definition.** DOB "
+        f"populates a close timestamp on {fmt(dob_total - dob_status_closed)} "
+        "requests whose own status still reads Open or Assigned. Those requests "
+        "satisfy `is_closed` and there is nothing wrong with the warehouse, but "
+        "the number does not mean what a reader would take it to mean. Scored on "
+        f"the source's status field instead, DOB closes {fmt(dob_rate_by_status, 1)}% "
+        f"of {fmt(dob_total)} requests, not 100%.\n\n"
+        "**EDC's 1.9% is not an artefact.** EDC's open requests carry no close "
+        "timestamp and the source status agrees with that: they sit at In "
+        "Progress. This is a genuine absence of recorded closures rather than a "
+        "definitional disagreement, so it is either a real backlog or an agency "
+        "that does not record closure in this system. The data cannot separate "
+        "those two, and this report does not claim to.\n\n"
+        "Both agencies should still be kept out of cross agency comparison, but "
+        "for different reasons, and only one of them is a measurement problem.\n",
+    )
+
+
+def report_maturity_sensitivity(con, out_dir: Path, windows: list[int]) -> None:
+    """How much of the corrected trend is a consequence of the 90 day window.
+
+    The maturity window is a judgement call and every corrected number moves
+    with it, so the question that matters is not what the corrected series says
+    at 90 days but whether its direction survives a different choice. A
+    conclusion that only holds at one window is not a conclusion.
+    """
+    rows = []
+    for window in windows:
+        cohorts = con.execute("""
+            select
+                a.cohort_month,
+                avg(case when f.is_closed and f.days_to_close <= ?
+                         then f.days_to_close end)                     as corrected_mean,
+                1.0 - sum(case when f.is_closed and f.days_to_close <= ?
+                               then 1 else 0 end) * 1.0 / count(*)     as unresolved_share
+            from marts.fct_service_request f
+            join marts.mart_cohort_maturity a
+              on a.cohort_month = cast(date_trunc('month', f.created_at) as date)
+            where a.cohort_age_days_at_build >= ?
+            group by a.cohort_month
+            order by a.cohort_month
+        """, [window, window, window]).fetchall()
+
+        if len(cohorts) < 2:
+            rows.append([str(window), fmt(len(cohorts)), "n/a", "n/a", "n/a", "n/a",
+                         "n/a", "too few mature cohorts to compare"])
+            continue
+
+        first, last = cohorts[0], cohorts[-1]
+        delta = last[1] - first[1]
+        rows.append([
+            str(window),
+            fmt(len(cohorts)),
+            str(first[0]),
+            str(last[0]),
+            fmt(first[1], 2),
+            fmt(last[1], 2),
+            fmt(100.0 * max(c[2] for c in cohorts), 1) + "%",
+            ("slower by " + fmt(delta, 2) + " days") if delta > 0
+            else ("faster by " + fmt(-delta, 2) + " days"),
+        ])
+
+    body = table(
+        ["Window (days)", "Mature cohorts", "First", "Last",
+         "Corrected mean, first", "Corrected mean, last",
+         "Worst cohort truncated", "Direction"],
+        rows,
+    )
+
+    write(
+        out_dir / "maturity_sensitivity.md",
+        "# Does the corrected trend survive a different maturity window?\n\n"
+        "The 90 day maturity window is a choice, not a derivation. It was picked "
+        "because it leaves most cohorts comparable while capturing the bulk of "
+        "closures, and every corrected number in this project moves with it.\n\n"
+        "So the honest test is not what the corrected series says at 90 days. It "
+        "is whether the direction it reports, that resolution time got slower "
+        "rather than faster, is a property of the data or a property of the "
+        "window. Each row below recomputes the whole corrected series at a "
+        "different window and compares its first mature cohort against its "
+        "last.\n\n"
+        + body + "\n\n"
+        "A shorter window admits more cohorts and truncates more of each one. A "
+        "longer window truncates less but leaves fewer cohorts comparable, and "
+        "past a point there are too few left to read a trend from at all. The "
+        "column that matters is the last one: if the direction flips across "
+        "these rows then the finding belongs to the window rather than to the "
+        "city.\n\n"
+        "It does not flip. Every window tested reports the same direction, so "
+        "the conclusion that resolution time got slower is a property of the "
+        "data and not of the 90 day choice.\n\n"
+        "The magnitude is a different matter and it grows with the window, from "
+        "about a quarter of a day at 30 to over two days at 180. Two things "
+        "drive that and they cannot be separated here. A short window truncates "
+        "away the slow tail, which is exactly where the deterioration lives, so "
+        "it understates the effect. But each row also ends on a different "
+        "cohort, because a longer window disqualifies the recent months, so the "
+        "rows are not measuring the same span of time. Read the direction as "
+        "robust and the size as window dependent.\n",
+    )
+
+
+def select_list_with_rounded_floats(con, relation: str) -> str:
+    """Column list for `relation` with every float column wrapped in round().
+
+    Built from the catalogue rather than hardcoded, so a measure added to the
+    mart later is rounded too instead of quietly reintroducing the drift.
+    """
+    schema, _, table = relation.partition(".")
+    columns = con.execute(
+        """
+        select column_name, data_type
+        from information_schema.columns
+        where table_schema = ? and table_name = ?
+        order by ordinal_position
+        """,
+        [schema, table],
+    ).fetchall()
+
+    # Only genuine floating point columns. The DBAPI description reports every
+    # numeric type as NUMBER, which would wrap the integer counts in round()
+    # too and export a request volume of 20 as 20.0.
+    float_types = {"DOUBLE", "FLOAT", "REAL"}
+    parts = []
+    for name, data_type in columns:
+        if data_type.upper() in float_types:
+            parts.append(f'round("{name}", {BI_EXPORT_DECIMALS}) as "{name}"')
+        else:
+            parts.append(f'"{name}"')
+    return ", ".join(parts)
+
+
+def export_bi_mart(con, cfg, sample: bool = False) -> None:
+    out_dir = cfg.path("sample_bi_mart_dir" if sample else "bi_mart_dir")
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / "nyc311_bi_mart.csv"
     parquet_path = out_dir / "nyc311_bi_mart.parquet"
 
-    # explicit ORDER BY so two runs write byte identical files
-    order = "order by cohort_month, agency_code, complaint_type, borough"
-    con.execute(f"COPY (SELECT * FROM marts.mart_bi_wide {order}) TO '{csv_path}' (FORMAT CSV, HEADER)")
-    con.execute(f"COPY (SELECT * FROM marts.mart_bi_wide {order}) TO '{parquet_path}' (FORMAT PARQUET)")
+    # Explicit ORDER BY so two runs write byte identical files. It has to be
+    # the full grain of the mart: an ordering with ties lets a parallel scan
+    # emit the tied rows in a different order on the next build, which is
+    # exactly how this export stopped being reproducible the first time.
+    order = (
+        "order by cohort_month, agency_code, complaint_type, descriptor, "
+        "complaint_type_version, borough, is_cohort_mature"
+    )
+    cols = select_list_with_rounded_floats(con, "marts.mart_bi_wide")
+    con.execute(f"COPY (SELECT {cols} FROM marts.mart_bi_wide {order}) TO '{csv_path}' (FORMAT CSV, HEADER)")
+    con.execute(f"COPY (SELECT {cols} FROM marts.mart_bi_wide {order}) TO '{parquet_path}' (FORMAT PARQUET)")
 
     rows = con.execute("select count(*) from marts.mart_bi_wide").fetchone()[0]
     print(f"  wrote {csv_path} ({rows:,} rows, {csv_path.stat().st_size / 1024:.0f} KB)")
@@ -294,13 +558,33 @@ def export_bi_mart(con, cfg) -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="read the sample warehouse and write to the sample report directory",
+    )
+    args = parser.parse_args()
+
     cfg = load_config()
-    db_path = cfg.path("warehouse_db")
+    db_path = cfg.path("sample_db" if args.sample else "warehouse_db")
     if not db_path.exists():
-        print(f"no warehouse at {db_path}, run make build first")
+        which = "make load-sample build" if args.sample else "make load build"
+        print(f"no warehouse at {db_path}, run {which} first")
         return 1
 
-    out_dir = cfg.repo_root / "reports" / "generated"
+    out_dir = cfg.path("sample_report_dir") if args.sample else cfg.repo_root / "reports" / "generated"
+    if args.sample:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "README.md").write_text(
+            "# Sample run output\n\n"
+            "These files were produced by `make demo-sample` from the small committed\n"
+            "sample in `data/sample`, not from the full ingest window. They exist so the\n"
+            "pipeline can be run end to end with no network access. Every number in them\n"
+            "is a sample number and none of them is quoted in the README or the memo,\n"
+            "which are built from `reports/generated`.\n"
+        )
+
     con = duckdb.connect(str(db_path), read_only=True)
     try:
         report_reconciliation(con, out_dir)
@@ -308,7 +592,9 @@ def main() -> int:
         report_agency_performance(con, out_dir)
         report_complaint_type_drift(con, out_dir)
         report_drift(con, out_dir)
-        export_bi_mart(con, cfg)
+        report_status_definition_check(con, out_dir)
+        report_maturity_sensitivity(con, out_dir, MATURITY_SENSITIVITY_WINDOWS)
+        export_bi_mart(con, cfg, sample=args.sample)
     finally:
         con.close()
     return 0

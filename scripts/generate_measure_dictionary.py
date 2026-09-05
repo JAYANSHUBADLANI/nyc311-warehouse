@@ -21,6 +21,7 @@ the Makefile stops.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -107,8 +108,8 @@ def render(spec: dict, cfg) -> str:
     return "\n".join(lines) + "\n"
 
 
-def check_against_mart(cfg, metric_names: set[str]) -> int:
-    db_path = cfg.path("warehouse_db")
+def check_against_mart(cfg, metric_names: set[str], sample: bool = False) -> int:
+    db_path = cfg.path("sample_db" if sample else "warehouse_db")
     if not db_path.exists():
         print(f"warehouse not built at {db_path}, skipping the implementation check")
         return 0
@@ -149,16 +150,26 @@ def check_against_mart(cfg, metric_names: set[str]) -> int:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="check the dictionary against the sample warehouse rather than the full one",
+    )
+    args = parser.parse_args()
+
     cfg = load_config()
     spec = load_metrics(cfg.repo_root)
     metric_names = {m["name"] for m in spec["metrics"]}
 
+    # The dictionary itself is rendered from config, not from data, so it is the
+    # same document either way and is written to the one path in both cases.
     out_path = cfg.repo_root / "reports" / "measure_dictionary.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(render(spec, cfg))
     print(f"wrote {out_path}")
 
-    return check_against_mart(cfg, metric_names)
+    return check_against_mart(cfg, metric_names, sample=args.sample)
 
 
 if __name__ == "__main__":

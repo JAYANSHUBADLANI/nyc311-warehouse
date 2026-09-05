@@ -1,0 +1,107 @@
+{
+  "rows_per_month": 500,
+  "slices": {
+    "2025-09": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2025-10": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2025-11": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2025-12": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2026-01": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2026-02": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2026-03": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2026-04": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2026-05": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2026-06": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2026-07": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    },
+    "2026-08": {
+      "complete": true,
+      "last_key": null,
+      "last_sort": null,
+      "rows": 500
+    }
+  },
+  "source": "systematic sample of the raw pull",
+  "total_rows": 6000,
+  "window": {
+    "columns": [
+      "unique_key",
+      "created_date",
+      "closed_date",
+      "agency",
+      "agency_name",
+      "complaint_type",
+      "descriptor",
+      "location_type",
+      "incident_zip",
+      "incident_address",
+      "street_name",
+      "address_type",
+      "city",
+      "status",
+      "due_date",
+      "resolution_action_updated_date",
+      "community_board",
+      "borough",
+      "open_data_channel_type",
+      "latitude",
+      "longitude"
+    ],
+    "end": null,
+    "sample": true,
+    "start": "2025-09-01T00:00:00"
+  }
+}
