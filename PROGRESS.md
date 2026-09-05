@@ -32,6 +32,9 @@ dictionary comes from a real run against the real pull.
 - 22,288 requests, 0.57%, carry a close timestamp while the source status still
   says something other than Closed. 17,568 of those are DOB, which is the whole
   explanation for DOB appearing to close 100% of its requests
+- Mutation probe over a 7.8 day gap: 2.8% of 3,000 requests changed, all of it
+  closure restatement, zero reclassification of complaint type, descriptor or
+  agency
 
 ## Decisions made, and why
 
@@ -148,10 +151,18 @@ under four threads is gone.
 
 ## Pending
 
-- [ ] A second live snapshot weeks after the first. The one I have compares
-      3,000 requests across a 2.67 hour gap and found zero changes, which bounds
-      same-day churn and essentially nothing else. This is the weakest claim in
-      the project and it is a matter of waiting rather than of code
+- [x] A second live snapshot weeks after the first. Done on 5 September, 187.28
+      hours after the 28 August capture. 84 of 3,000 requests changed, 2.8%, and
+      every one of them was a closure being recorded or revised: closed_date 79,
+      status 79, resolution_action_updated_date 84. complaint_type, descriptor,
+      agency and created_date changed on zero rows. So the mutation the replay
+      cannot see did not happen in a week on the sample most likely to show it,
+      while the mutation it reconstructs correctly moved 2.6% in the same window.
+      Rule of three puts the 95% upper bound on reclassification at about 0.10%
+      per week. This was the weakest claim in the project and the gap is what
+      fixed it, not any code. Quantified in
+      `reports/generated/mutation_probe.md`, and rerunning `make probe-recheck`
+      against the same capture tightens it further
 - [x] Run down DOB at 100% closed on 116,287 requests and EDC at 1.9% on 14,260.
       Done, and they turned out to be two different things. DOB records a close
       timestamp on 17,568 requests its own status field still calls Open or

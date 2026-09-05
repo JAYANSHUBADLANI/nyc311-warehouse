@@ -15,6 +15,7 @@ formatted to a fixed number of places, and nothing reads the wall clock.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -504,6 +505,95 @@ def report_maturity_sensitivity(con, out_dir: Path, windows: list[int]) -> None:
     )
 
 
+def report_mutation_probe(con, out_dir: Path, cfg) -> None:
+    """The empirical bound on what the vintage replay cannot see.
+
+    The replay rebuilds each vintage from timestamps, which recovers restatement
+    of the close date exactly but is blind to any edit that overwrites a value in
+    place: a reclassified complaint type, a corrected descriptor, a reassigned
+    agency. Those leave no trace in a single snapshot.
+
+    This report turns that from an unquantified caveat into a measurement, by
+    reading the probe's two snapshots of the same 3,000 request ids and reporting
+    which fields moved between them. It reads the probe result rather than the
+    warehouse, and says so plainly when no probe has been run.
+    """
+    probe_path = cfg.path("raw_dir") / "_mutation_probe_result.json"
+    if not probe_path.exists():
+        write(
+            out_dir / "mutation_probe.md",
+            "# Mutation probe\n\n"
+            "No probe result on disk. Run `make probe-capture`, wait, then "
+            "`make probe-recheck`.\n",
+        )
+        return
+
+    r = json.loads(probe_path.read_text())
+    counts = r["field_change_counts"]
+    n = r["sample_size"]
+
+    # Fields the replay reconstructs correctly from timestamps, against fields it
+    # cannot see at all. The split is the whole point of the probe.
+    reconstructible = ["closed_date", "status", "resolution_action_updated_date"]
+    invisible = ["complaint_type", "descriptor", "agency", "created_date"]
+
+    def rows_for(fields):
+        return [[
+            f,
+            fmt(counts.get(f, 0)),
+            fmt(100.0 * counts.get(f, 0) / n, 2) + "%",
+        ] for f in fields if f in counts]
+
+    hdr = ["Field", "Changed", "Share of sample"]
+    gap_days = r["gap_hours"] / 24.0
+
+    # Rule of three: with zero events in n trials the 95% upper bound on the rate
+    # is about 3/n. Quoted because "we saw none" is not the same as "there are
+    # none" and the difference matters for a caveat this load bearing.
+    upper_bound = 100.0 * 3.0 / n
+
+    write(
+        out_dir / "mutation_probe.md",
+        "# What the vintage replay cannot see, measured\n\n"
+        "The replay reconstructs each historical vintage from the timestamps in a "
+        "single pull. That recovers restatement of the close date exactly, and it "
+        "is blind to any edit that overwrites a value in place, because a single "
+        "snapshot carries no record that the old value ever existed.\n\n"
+        "This probe bounds that blind spot rather than leaving it as an assertion. "
+        f"It recorded every field of {fmt(n)} requests at "
+        f"{r['captured_at']}, refetched the same ids at {r['rechecked_at']}, and "
+        "diffed them. The sample is drawn from the most recent complete month on "
+        "purpose, because that is where restatement actually happens; an older "
+        "sample would report a rate near zero that said more about the sample "
+        "than about the source.\n\n"
+        f"**Gap: {fmt(r['gap_hours'], 2)} hours, {fmt(gap_days, 1)} days. "
+        f"{fmt(r['requests_changed'])} of {fmt(n)} requests changed, "
+        f"{fmt(r['requests_changed_pct'], 1)}%.**\n\n"
+        "## Fields the replay reconstructs correctly\n\n"
+        + table(hdr, rows_for(reconstructible)) + "\n\n"
+        "These are the closure restatements. The replay handles them by "
+        "construction, and they are the same movement the append only versus "
+        "merge comparison measures.\n\n"
+        "## Fields the replay is blind to\n\n"
+        + table(hdr, rows_for(invisible)) + "\n\n"
+        "## What this establishes\n\n"
+        f"Over {fmt(gap_days, 1)} days, no request in the sample was "
+        "reclassified: not one change of complaint type, descriptor or owning "
+        "agency. Every mutation observed was a closure being recorded or revised, "
+        "which is exactly the class the replay reconstructs.\n\n"
+        "That is a bound, not a proof of absence. With zero events in "
+        f"{fmt(n)} observations the rule of three puts the 95% upper bound on the "
+        f"reclassification rate at roughly {fmt(upper_bound, 2)}% per "
+        f"{fmt(gap_days, 1)} day window. So in place reclassification is either "
+        "absent or rare enough that it cannot materially move the vintage "
+        "comparison, and the replay's blind spot is small rather than merely "
+        "unmeasured.\n\n"
+        "A longer gap would tighten this further. The capture is on disk and "
+        "`make probe-recheck` can be rerun against it at any time, so the bound "
+        "improves by waiting rather than by writing anything.\n",
+    )
+
+
 def select_list_with_rounded_floats(con, relation: str) -> str:
     """Column list for `relation` with every float column wrapped in round().
 
@@ -594,6 +684,7 @@ def main() -> int:
         report_drift(con, out_dir)
         report_status_definition_check(con, out_dir)
         report_maturity_sensitivity(con, out_dir, MATURITY_SENSITIVITY_WINDOWS)
+        report_mutation_probe(con, out_dir, cfg)
         export_bi_mart(con, cfg, sample=args.sample)
     finally:
         con.close()

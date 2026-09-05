@@ -265,14 +265,25 @@ it, and the replay will show the current classification at every historical
 vintage as though it had always been there. Every vintage in the comparison
 above inherits that limitation.
 
-I tried to bound it by snapshotting the live API twice and comparing the
-overlap. The result is weak and I would rather say so than dress it up: 3,000
-requests re-fetched after a gap of **2.67 hours**, of which 0 changed on any of
-the seven fields checked. A 2.67 hour gap is far too short to observe
-meaningful reclassification, so what that probe establishes is close to
-nothing. It bounds same-day churn and no more. A proper bound needs two
-snapshots weeks apart, which is a matter of waiting rather than of code, and
-the probe script is in place to do it.
+I bounded it by snapshotting the live API twice and comparing the overlap.
+3,000 requests recorded on 28 August were re-fetched **187.28 hours, 7.8 days**
+later. 84 of them, 2.8%, had changed. Every single change was a closure being
+recorded or revised: `closed_date` on 79, `status` on 79,
+`resolution_action_updated_date` on 84. **Not one request was reclassified.**
+`complaint_type`, `descriptor`, `agency` and `created_date` moved on zero rows.
+
+So the mutation the replay is blind to did not occur in a week, on the sample
+most likely to show it, while the mutation the replay reconstructs correctly
+moved 2.6% of the sample in the same window. That is a bound rather than a proof
+of absence: with zero events in 3,000 observations the rule of three puts the
+95% upper bound on reclassification at about 0.10% per week, which is too small
+to move the vintage comparison. The full breakdown is in
+[reports/generated/mutation_probe.md](reports/generated/mutation_probe.md).
+
+An earlier version of this probe compared a 2.67 hour gap and found nothing,
+which established close to nothing and I said so. The gap is what fixed it, not
+the code, and `make probe-recheck` can be rerun against the same capture to
+tighten the bound further.
 
 ## What this does not cover
 
@@ -295,8 +306,11 @@ owner without saying in the same breath that the real targets differ by
 complaint type. It is in the metrics layer because the layer needs an on time
 measure, not because 30 days is defensible.
 
-**The mutation probe does not do the job it was built for.** Covered above. It
-is the gap I would most want to close.
+**The mutation probe is now a real bound, but it is a bound on one week.**
+Covered above. 7.8 days of no reclassification constrains the blind spot to
+under about 0.10%, which is enough to trust the vintage comparison and not
+enough to claim reclassification never happens. A multi month gap would be the
+honest version and it costs nothing but waiting.
 
 **Reopened requests are invisible.** The source overwrites, so a request closed,
 reopened and closed again is indistinguishable from one that took that long the
