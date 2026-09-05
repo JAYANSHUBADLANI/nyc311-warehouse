@@ -1,0 +1,216 @@
+# The one place each metric is defined.
+#
+# reports/measure_dictionary.md is generated from this file, and a dbt test
+# asserts that every metric named here is actually present as a column in
+# mart_agency_month. The two cannot drift apart without something failing.
+#
+# Every entry states its grain, its filter, and the exact denominator, because
+# almost every disagreement about a 311 number turns out to be a disagreement
+# about one of those three rather than about the data.
+
+metrics:
+
+  - name: request_volume
+    label: Request volume
+    grain: agency, complaint type, borough, created month
+    definition: >
+      Count of service requests created within the period. One request counts
+      once, on the month it was created, regardless of when or whether it
+      closed.
+    numerator: count of rows in fct_service_request
+    denominator: not a ratio
+    filters: none beyond the warehouse exclusion rules
+    caveats: >
+      Dominated by NYPD noise complaints. In 2025 NYPD filed 2,828,356 of the
+      3,655,039 requests in the year, so any citywide total is mostly one
+      agency's workload and should be split or weighted before it is compared
+      across agencies.
+
+  - name: closed_volume
+    label: Closed volume
+    grain: agency, complaint type, borough, created month
+    definition: >
+      Count of requests from the created month cohort that have a close
+      timestamp as at the build instant.
+    numerator: count of rows where is_closed
+    denominator: not a ratio
+    filters: none
+    caveats: >
+      Counted on a cohort basis, meaning the request is attributed to the month
+      it was created in, not the month it was closed in. A period basis count,
+      closures that happened during the month, is a different number and is not
+      what this is.
+
+  - name: closure_rate
+    label: Closure rate
+    grain: agency, complaint type, borough, created month
+    definition: >
+      Share of a created month cohort that has closed as at the build instant.
+    numerator: count of requests where is_closed
+    denominator: >
+      count of all requests created in that month, open and closed alike. Not
+      the count of requests with a known outcome, and not the count of
+      closures observed during the month.
+    filters: none
+    caveats: >
+      Biased upward for old cohorts and downward for young ones, because a
+      cohort created last week has had a week to close while one created a year
+      ago has had a year. Comparable only between cohorts of equal maturity.
+      Use closure_rate_at_maturity for any comparison across months.
+
+  - name: closure_rate_at_maturity
+    label: Closure rate at maturity
+    grain: agency, complaint type, borough, created month
+    definition: >
+      Share of a created month cohort that closed within the maturity window of
+      being created, counting only cohorts old enough to have had the full
+      window available.
+    numerator: >
+      count of requests that closed within maturity_window_days of their own
+      created timestamp
+    denominator: >
+      count of all requests created in that month, provided the whole month is
+      itself older than maturity_window_days at the build instant. Cohorts
+      younger than that are reported as null rather than as a low number.
+    filters: cohort month must be fully mature at the build instant
+    caveats: >
+      This is the closure measure that is safe to compare across months. It
+      answers "what share closed within 90 days" rather than "what share has
+      closed so far", so it does not reward a cohort for being old.
+
+  - name: mean_days_to_close
+    label: Mean days to close, naive
+    grain: agency, complaint type, borough, created month
+    definition: >
+      Mean elapsed days from created to closed, over requests that have closed.
+    numerator: sum of days_to_close over closed requests
+    denominator: count of closed requests, which excludes every still open request
+    filters: is_closed
+    caveats: >
+      This is the biased measure the memo is about, kept deliberately so the
+      bias can be shown rather than described. Recent months look faster than
+      old ones because the slow requests in a recent cohort have not closed yet
+      and so contribute nothing to either the numerator or the denominator. Do
+      not publish this as a trend.
+
+  - name: mean_days_to_close_matured
+    label: Mean days to close, maturity corrected
+    grain: agency, complaint type, borough, created month
+    definition: >
+      Mean elapsed days from created to closed, counting only closures that
+      happened within the maturity window, and only for cohorts old enough that
+      the full window has elapsed. Requests still open at the end of the window
+      are excluded from the mean but are reported alongside it as the
+      unresolved share, so the excluded mass stays visible.
+    numerator: >
+      sum of days_to_close over requests that closed within
+      maturity_window_days of being created
+    denominator: >
+      count of requests that closed within maturity_window_days of being
+      created, for cohorts fully older than the window
+    filters: cohort fully mature, closure occurred inside the window
+    caveats: >
+      Every cohort is measured over the same fixed observation window, so the
+      series is comparable month to month. It is not the same quantity as the
+      naive mean and will usually be lower, because it truncates the long tail
+      rather than waiting for it. Read it together with
+      unresolved_share_at_maturity, which reports the mass that was truncated.
+
+  - name: median_days_to_close
+    label: Median days to close
+    grain: agency, complaint type, borough, created month
+    definition: Median elapsed days from created to closed, over closed requests.
+    numerator: not a ratio
+    denominator: not a ratio
+    filters: is_closed
+    caveats: >
+      Carries the same cohort maturity bias as the mean, and is reported
+      because 311 durations are heavily right skewed, so the median and the
+      mean answer different questions. The median is robust to the tail, which
+      also means it hides it.
+
+  - name: unresolved_share_at_maturity
+    label: Unresolved share at maturity
+    grain: agency, complaint type, borough, created month
+    definition: >
+      Share of a mature cohort that had still not closed by the end of the
+      maturity window.
+    numerator: >
+      count of requests not closed within maturity_window_days of being created
+    denominator: count of all requests in the cohort, for mature cohorts only
+    filters: cohort fully mature
+    caveats: >
+      This is the honest companion to mean_days_to_close_matured. The corrected
+      mean truncates the slow tail, and this number says how much tail was
+      truncated. An agency with a fast corrected mean and a high unresolved
+      share is not fast, it is fast on the easy half.
+
+  - name: backlog_open_count
+    label: Open backlog
+    grain: agency, complaint type, borough, as at the build instant
+    definition: >
+      Count of requests created on or before the build instant that had no
+      close timestamp as at that instant.
+    numerator: count of rows where not is_closed
+    denominator: not a ratio
+    filters: none
+    caveats: >
+      A point in time stock, not a flow, so it cannot be summed across months.
+      It is also bounded by the ingest window: a request created before the
+      window opened and still open today is genuinely in the city's backlog but
+      is not in this warehouse, so this understates true backlog by an unknown
+      amount that grows the shorter the window is.
+
+  - name: on_time_rate
+    label: On time rate
+    grain: agency, complaint type, borough, created month
+    definition: >
+      Share of requests with a known target outcome that met the target.
+    numerator: count of requests closed within sla_target_days of creation
+    denominator: >
+      count of requests whose outcome against target is already known, which
+      is closed requests plus still open requests that have already breached
+      the target. Still open requests that are inside the target are excluded
+      from both sides, because whether they will meet it is genuinely not yet
+      determined.
+    filters: is_within_target is not null
+    caveats: >
+      The target is a single citywide number from config, currently 30 days.
+      Real NYC 311 targets are set per agency and per complaint type and this
+      project does not encode that table, so this measure is directionally
+      useful and not a compliance figure. Treating an open but already breached
+      request as a failure is a deliberate choice: excluding it would let an
+      agency improve its rate by simply never closing anything.
+
+# Cross cutting decisions that apply to every metric above, recorded here so
+# they are stated once rather than argued about per metric.
+conventions:
+
+  reopened_requests: >
+    A reopened request counts once, not twice. NYC 311 reuses the same
+    unique_key when a request is reopened and overwrites its close date, so the
+    published data carries no reopen event and no way to recover the earlier
+    close. Duration is therefore measured from creation to the final close, and
+    a request that was closed, reopened and closed again looks identical to one
+    that took that long the first time. This inflates measured duration for
+    reopened requests and there is no way to separate the two from this source.
+
+  cohort_versus_period: >
+    Every rate and duration measure here is on a cohort basis: the request is
+    attributed to the month it was created in. A period basis, attributing to
+    the month work happened, would answer a different and equally reasonable
+    question. Mixing the two, for example a numerator of closures in the month
+    over a denominator of creations in the month, produces a ratio that can
+    exceed one and means nothing. That mixed form is deliberately not offered.
+
+  duration_units: >
+    Durations are fractional days from second level differences, not whole day
+    counts. A whole day count based on calendar boundary crossings scores a
+    request opened at 23:00 and closed at 01:00 as one day and one opened at
+    01:00 and closed at 23:00 as zero, which is a systematic bias rather than
+    rounding noise.
+
+  null_handling: >
+    An open request has a null duration rather than a zero. Zeroes would be
+    averaged in and would drag every duration measure toward zero, and it is
+    exactly the slowest requests that are still open.

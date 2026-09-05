@@ -1,0 +1,56 @@
+version: 2
+
+sources:
+  - name: comparison
+    description: >
+      Tables written by scripts/run_vintage_replay.py rather than by dbt. The
+      replay has to drive dbt once per vintage, so the log it accumulates across
+      those runs cannot itself be a dbt model.
+    schema: comparison
+    tables:
+      - name: vintage_drift_log
+        description: One row per replayed vintage, holding the state of both incremental models at that instant.
+
+models:
+  - name: fct_requests_append_only
+    description: >
+      Incremental fact built with an append strategy, which never revisits a key
+      it has already loaded. Present to be measured, not to be used.
+    columns:
+      - name: request_id
+        description: >
+          Deliberately not tested for uniqueness. The append guard should keep
+          it unique, and if it ever stops doing so that is a finding about the
+          strategy rather than a reason to fail the build.
+
+  - name: fct_requests_merge
+    description: >
+      The same model with a merge strategy, so restated rows update in place.
+      This is the correct one and the reference the other is scored against.
+    columns:
+      - name: request_id
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+
+  - name: comparison_drift_summary
+    description: >
+      Per vintage divergence between the two strategies: rows, closures, closure
+      rate and mean resolution time, with the error in each.
+    columns:
+      - name: vintage_seq
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+      - name: share_of_closures_missed
+        description: >
+          Closures the append only table is unaware of, over the closures a
+          correctly merged table holds at the same vintage.

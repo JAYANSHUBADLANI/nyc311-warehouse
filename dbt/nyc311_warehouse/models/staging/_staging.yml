@@ -1,0 +1,92 @@
+version: 2
+
+models:
+  - name: stg_service_requests
+    description: >
+      Typed and cleaned service requests, one row per request, nothing dropped.
+      Tests on this model are split by intent. Anything describing a pipeline
+      invariant is an error, because breaking it means the code is wrong.
+      Anything describing the state of the source data is a warning, because
+      the source really is dirty and a green suite bought by loosening the
+      assertion would be worth nothing. The warning counts are reported in the
+      README as measured failure rates rather than tuned away.
+    columns:
+      - name: request_id
+        description: NYC 311 identifier. One row per request after the append log is resolved.
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+
+      - name: created_at
+        description: Parsed creation timestamp. A null here means the source value would not parse.
+        tests:
+          - not_null:
+              config:
+                severity: warn
+                warn_if: ">0"
+
+      - name: status_raw
+        description: >
+          Free text status as delivered. Deliberately not constrained to a
+          fixed list: the source adds and retires status strings without notice,
+          and an accepted_values test on it would be a test of the vocabulary
+          rather than of the pipeline. The derived is_closed flag is what
+          downstream logic uses, and that is driven by the close timestamp.
+
+      - name: source_updated_at
+        description: Proxy for a last modified timestamp, used as the incremental high water mark.
+        tests:
+          - not_null:
+              config:
+                severity: error
+
+      - name: latitude
+        description: Latitude, nulled when it falls outside the New York City bounding box.
+      - name: longitude
+        description: Longitude, nulled when it falls outside the New York City bounding box.
+
+  - name: int_requests_valid
+    description: Requests fit to be placed at the fact grain. The complement of int_requests_quarantined.
+    columns:
+      - name: request_id
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+      - name: created_at
+        tests:
+          - not_null:
+              config:
+                severity: error
+
+  - name: int_requests_quarantined
+    description: Requests excluded from the fact table, one row per exclusion, with the reason.
+    columns:
+      - name: request_id
+        tests:
+          - unique:
+              config:
+                severity: error
+      - name: exclusion_reason
+        description: >
+          Which fatal rule removed the row. A row failing several rules is
+          reported under the first in a fixed order, so these counts partition
+          the quarantine set and can be summed without double counting.
+        tests:
+          - not_null:
+              config:
+                severity: error
+          - accepted_values:
+              values:
+                - missing_request_id
+                - unparseable_or_missing_created_date
+                - closed_before_created
+              config:
+                severity: error

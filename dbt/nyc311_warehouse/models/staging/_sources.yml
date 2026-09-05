@@ -1,0 +1,35 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Landing zone written by src/ingest/load_landing.py. Every column is
+      VARCHAR exactly as the Socrata API delivered it. Nothing is typed, cleaned
+      or deduplicated here on purpose, so that a parse failure surfaces as a
+      visible test failure downstream rather than as a row that quietly
+      disappeared during ingestion.
+    schema: raw
+    tables:
+      - name: service_requests_landing
+        description: >
+          Append log of pulled service requests. Grain is
+          (unique_key, _ingested_at), not unique_key: a later fetch of the same
+          request adds a row rather than overwriting the earlier one. That is
+          what makes restatement observable instead of invisible.
+        columns:
+          - name: unique_key
+            description: NYC 311 identifier for the service request. Unique per request, not per row of this table.
+          - name: created_date
+            description: When the request was opened. The dataset's natural sort order.
+          - name: closed_date
+            description: When the request was closed. Null while the request is open, and populated later by a restatement.
+          - name: agency
+            description: Short agency code, for example NYPD or HPD.
+          - name: complaint_type
+            description: Top level category. The vocabulary is not stable across years, which is why the dimension is Type 2.
+          - name: descriptor
+            description: Sub category within complaint_type.
+          - name: status
+            description: Free text status as of the pull, for example Open, Closed, In Progress.
+          - name: _ingested_at
+            description: UTC timestamp of the fetch batch that landed this row. Added by the ingest, not by the API.

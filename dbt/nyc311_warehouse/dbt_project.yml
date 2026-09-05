@@ -1,0 +1,45 @@
+name: nyc311_warehouse
+version: "1.0.0"
+config-version: 2
+
+profile: nyc311_warehouse
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# These vars are written by scripts/config_to_dbt_vars.py from
+# config/config.yml, which is the single place any of them is set. The values
+# below are the committed defaults and are overwritten on every make run, so
+# edit config/config.yml rather than this file.
+vars:
+  window_start: "2025-09-01T00:00:00"
+  window_end: "2026-08-28T00:00:00"
+  sla_target_days: 30
+  maturity_window_days: 90
+  vintage_cadence: monthly
+  vintage_first: "2025-09-30"
+  # the "as of" instant the marts are built against. Everything that needs a
+  # notion of now, backlog age, cohort maturity, reads this rather than
+  # calling current_date, so two runs on the same input produce identical
+  # output.
+  build_as_of: "2026-08-28T00:00:00"
+
+models:
+  nyc311_warehouse:
+    +materialized: table
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: intermediate
+    marts:
+      +schema: marts
+    comparison:
+      +schema: comparison

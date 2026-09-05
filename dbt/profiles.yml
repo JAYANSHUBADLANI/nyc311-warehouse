@@ -1,0 +1,12 @@
+nyc311_warehouse:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # relative to the dbt project directory, so the repo runs as cloned
+      path: ../../data/warehouse.duckdb
+      threads: 4
+    devsample:
+      type: duckdb
+      path: ../../data/dev.duckdb
+      threads: 4

@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+# raw pulls and generated warehouse artefacts stay out of version control
+data/raw/
+data/vintages/
+data/*.duckdb
+data/*.duckdb.wal
+!data/sample/
+
+# dbt. profiles.yml is committed on purpose: it holds a relative DuckDB path
+# and no credentials, so the repo runs as cloned.
+dbt/nyc311_warehouse/target/
+dbt/nyc311_warehouse/dbt_packages/
+dbt/nyc311_warehouse/logs/
+
+# generated reports that depend on a run, not on the code
+reports/generated/
+
+# local dev scratch, not part of the deliverable
+data/dev/
+data/dev.duckdb
+dbt/.user.yml

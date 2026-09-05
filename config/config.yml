@@ -1,0 +1,115 @@
+# Single source of configuration for the whole pipeline.
+# Nothing in src/ or dbt/ should hardcode a date window, agency filter, SLA
+# target or vintage cadence. If a script needs one of these values, it reads
+# this file (or, for dbt, the mirrored vars produced by
+# scripts/config_to_dbt_vars.py from this same file).
+
+socrata:
+  domain: data.cityofnewyork.us
+  dataset_id: erm2-nwe9
+  base_url: https://data.cityofnewyork.us/resource/erm2-nwe9.json
+  csv_export_url: https://data.cityofnewyork.us/api/views/erm2-nwe9/rows.csv
+  # read from this env var if set, otherwise the pipeline runs unauthenticated
+  # at the lower, throttled rate limit
+  app_token_env_var: NYC_OPEN_DATA_APP_TOKEN
+  # Measured against the live API from this machine with no app token: a
+  # 5,000 row page takes about 45 seconds, 10,000 about 50, 25,000 about 103,
+  # and 50,000 does not return inside two minutes. Throughput is roughly flat
+  # per row, so the page size is chosen to keep any single request well inside
+  # the timeout rather than to maximise rows per request. A page that times
+  # out costs a full retry, which is the worst outcome on a throttled tier.
+  page_size: 10000
+  # Pagination sort key. The pair has to be unique for a keyset walk to be
+  # correct, and unique_key alone is unique, but sorting by unique_key alone
+  # is far too slow to return: a request ordered on it does not complete
+  # inside 170 seconds, while the same request ordered on created_date first
+  # returns in about 35. created_date leads for speed, unique_key breaks ties
+  # for correctness.
+  sort_column: created_date
+  tiebreak_column: unique_key
+  request_timeout_seconds: 180
+  max_retries: 5
+  retry_backoff_seconds: 2
+
+ingest:
+  # SCOPE DECISION, and it is a reduction from the original plan. I first
+  # targeted 2023-01-01 to present, which the API says is 12,951,069 rows.
+  # Measured throughput against the live API from this machine, with no app
+  # token, is roughly 240 rows per second, and it does not improve with
+  # concurrent connections because Socrata throttles the unauthenticated tier
+  # in aggregate rather than per connection. That window would therefore take
+  # about 15 hours of continuous pulling. I scoped down to a trailing 12 full
+  # months instead, which is 3,890,842 rows by the API's own count and pulls
+  # in roughly 4 to 5 hours.
+  #
+  # What the smaller window still supports: 12 monthly cohorts, of which the
+  # older ones are fully mature at the 90 day window below, real restatement
+  # of open requests, and genuine complaint type vocabulary drift. What it
+  # gives up: multi-year seasonality and the longer SCD history that a
+  # 2023-start window would have shown.
+  #
+  # To run the full window instead, change window_start back to
+  # "2023-01-01T00:00:00" and rerun the ingest. Nothing else needs to change.
+  window_start: "2025-09-01T00:00:00"
+  # null means "through the moment the ingest script runs"
+  window_end: null
+  agency_filter: null # null means no agency filter, all agencies in scope
+  # columns pulled from the API. The dataset has 46 columns, most of which are
+  # mode-specific (taxi, bridge, park) and null for the overwhelming majority
+  # of rows. Pulling only what the warehouse models actually consume roughly
+  # halves the bytes on the wire.
+  columns:
+    - unique_key
+    - created_date
+    - closed_date
+    - agency
+    - agency_name
+    - complaint_type
+    - descriptor
+    - location_type
+    - incident_zip
+    - incident_address
+    - street_name
+    - address_type
+    - city
+    - status
+    - due_date
+    - resolution_action_updated_date
+    - community_board
+    - borough
+    - open_data_channel_type
+    - latitude
+    - longitude
+
+vintages:
+  # cadence for the replayed historical vintages used in the append-only vs
+  # merge comparison and the cohort maturity analysis
+  cadence: monthly
+  first_vintage: "2025-09-30"
+  # last vintage is always "now" at build time, appended by the vintage script
+
+sla:
+  # a single citywide default target, in calendar days from created_date to
+  # closed_date, used for the on-time performance measure. Documented in the
+  # measure dictionary as a simplification: NYC 311 SLAs are actually set per
+  # agency and complaint type, and this project does not attempt to encode
+  # that full table. See reports/measure_dictionary.md.
+  default_target_days: 30
+
+maturity:
+  # fixed maturity window, in days, used for the corrected cohort analysis.
+  # a monthly cohort is only scored on requests old enough to have had this
+  # many days to close, so a young cohort is not compared unfairly against an
+  # old one that has had more time to resolve its slow tickets.
+  window_days: 90
+
+paths:
+  raw_dir: data/raw
+  sample_dir: data/sample
+  vintages_dir: data/vintages
+  warehouse_db: data/warehouse.duckdb
+  bi_mart_dir: reports/generated/bi_mart
+
+dbt:
+  project_dir: dbt/nyc311_warehouse
+  profiles_dir: dbt

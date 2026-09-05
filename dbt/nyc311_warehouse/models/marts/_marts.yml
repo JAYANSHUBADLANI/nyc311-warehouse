@@ -1,0 +1,185 @@
+version: 2
+
+models:
+
+  - name: fct_service_request
+    description: >
+      Fact at service request grain: one row per request, always. Every
+      dimension key is non null, using an explicit UNKNOWN member rather than a
+      null, so downstream joins can be inner joins without losing rows.
+    columns:
+      - name: request_id
+        description: Degenerate dimension, the natural key of the request itself.
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+
+      - name: agency_key
+        description: Foreign key to dim_agency. UNKNOWN when the source carried no agency.
+        tests:
+          - not_null:
+              config:
+                severity: error
+          - relationships:
+              to: ref('dim_agency')
+              field: agency_key
+              config:
+                severity: error
+
+      - name: complaint_type_key
+        description: >
+          Foreign key to the version of dim_complaint_type that was in force
+          when the request was created, not to the current version.
+        tests:
+          - not_null:
+              config:
+                severity: error
+          - relationships:
+              to: ref('dim_complaint_type')
+              field: complaint_type_key
+              config:
+                severity: error
+
+      - name: geography_key
+        description: Foreign key to dim_geography.
+        tests:
+          - not_null:
+              config:
+                severity: error
+          - relationships:
+              to: ref('dim_geography')
+              field: geography_key
+              config:
+                severity: error
+
+      - name: created_date_key
+        description: Foreign key to dim_date.
+        tests:
+          - not_null:
+              config:
+                severity: error
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+              config:
+                severity: error
+
+      - name: created_at
+        tests:
+          - not_null:
+              config:
+                severity: error
+
+      - name: days_to_close
+        description: >
+          Fractional days from creation to closure. Null for an open request,
+          deliberately, so that averages are not dragged toward zero by
+          requests that simply have not finished.
+
+      - name: is_closed
+        tests:
+          - not_null:
+              config:
+                severity: error
+
+  - name: dim_agency
+    description: Agency dimension, Type 1, with an explicit unknown member.
+    columns:
+      - name: agency_key
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+
+  - name: dim_geography
+    description: Borough, community board and zip combination. Type 1.
+    columns:
+      - name: geography_key
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+
+  - name: dim_date
+    description: Generated calendar spine covering the ingest window plus a year either side.
+    columns:
+      - name: date_key
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+
+  - name: dim_complaint_type
+    description: >
+      Slowly changing dimension, Type 2, over the complaint type and descriptor
+      pair. Validity is a half open interval so exactly one version matches any
+      instant.
+    columns:
+      - name: complaint_type_key
+        description: Surrogate key, unique per version rather than per natural key.
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+      - name: is_current
+        tests:
+          - not_null:
+              config:
+                severity: error
+      - name: valid_from_at
+        tests:
+          - not_null:
+              config:
+                severity: error
+      - name: valid_to_at
+        tests:
+          - not_null:
+              config:
+                severity: error
+
+  - name: mart_agency_month
+    description: >
+      Metrics mart at cohort month, agency, complaint type and borough. Every
+      measure named in config/metrics.yml is implemented here exactly once.
+    columns:
+      - name: cohort_month
+        tests:
+          - not_null:
+              config:
+                severity: error
+      - name: request_volume
+        tests:
+          - not_null:
+              config:
+                severity: error
+
+  - name: mart_cohort_maturity
+    description: The naive duration series next to the maturity corrected one, with the bias between them.
+    columns:
+      - name: cohort_month
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+
+  - name: dq_exclusion_ledger
+    description: Row count reconciliation from landing to fact, with every difference named.
