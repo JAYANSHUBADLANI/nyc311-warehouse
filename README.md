@@ -1,5 +1,7 @@
 # NYC 311 service request warehouse
 
+[![tests](https://github.com/JAYANSHUBADLANI/nyc311-warehouse/actions/workflows/tests.yml/badge.svg)](https://github.com/JAYANSHUBADLANI/nyc311-warehouse/actions/workflows/tests.yml)
+
 I built a local analytical warehouse over New York City's 311 service request
 data to answer one question honestly: how fast does each agency actually close
 the requests it owns, and how much of any apparent improvement is an artefact
